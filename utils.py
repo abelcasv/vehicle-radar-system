@@ -1,133 +1,137 @@
 """
-Funciones auxiliares para detección, seguimiento y conteo de coches.
-Separadas del programa principal para mejorar claridad y reutilización.
+Auxiliary functions for detecting, tracking, and counting cars.
+Separated from the main program to improve clarity and reuse.
 """
 
 import cv2
 import math
 
-
-# ************************************************************
-# CLASE COCHE
-
-class Coche:
-    """
-    Representa un coche detectado y seguido a lo largo de los frames.
-    """
-    def __init__(self, centro, dimensiones, id_coche):
-        self.centro = centro                  # Centro actual del coche
-        self.dimensiones = dimensiones        # (x, y, w, h)
-        self.id_coche = id_coche              # Identificador único
-        self.sin_deteccion = 0                # Frames sin detectar
-        self.contado = False                  # Para no contar dos veces
+from scipy.ndimage import center_of_mass
+from scipy.spatial import distance_matrix
 
 
 # ************************************************************
-# PREPROCESADO DEL FRAME
+# CLASS VEHICLE
 
-def obtener_mascara(frame, fondo, kernel):
+class Vehicle:
     """
-    Aplica sustracción de fondo y operaciones morfológicas
-    para obtener la máscara de movimiento.
+    It represents a car detected and tracked throughout the frames.
     """
-    fgmask = fondo.apply(frame)
-    fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, kernel)
-    fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_CLOSE, kernel)
-    return fgmask
+    def __init__(self, center, bbox, vehicle_id):
+        self.center = center               # Current center of the car
+        self.bbox = bbox                   # (x, y, w, h)
+        self.vehicle_id = vehicle_id       # Unique identifier
+        self.frames_missing = 0            # Undetected frames
+        self.counted = False               # To avoid duplication
 
 
 # ************************************************************
-# ASOCIACIÓN DE COCHES
+# FRAME PREPROCESSING
 
-def buscar_coche_mas_cercano(centro, coches, max_dist):
+def get_foreground_mask(frame, background_subtractor, kernel):
     """
-    Busca el coche existente más cercano a un centro dado.
+    Applies background subtraction and morphological operations
+    to obtain the motion mask.
     """
-    coche_cercano = None
-    distancia_min = max_dist
+    fg_mask = background_subtractor.apply(frame)
+    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
+    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+    return fg_mask
 
-    for coche in coches:
-        d = math.hypot(
-            centro[0] - coche.centro[0],
-            centro[1] - coche.centro[1]
+
+# ************************************************************
+# VEHICLE ASSOCIATION
+
+def find_closest_vehicle(center, vehicles, max_distance):
+    """
+    Finds the existing vehicle closest to a given center.
+    """
+    closest_vehicle = None
+    min_distance = max_distance
+
+    for vehicle in vehicles:
+        distance = math.hypot(
+            center[0] - vehicle.center[0],
+            center[1] - vehicle.center[1]
         )
-        if d < distancia_min:
-            distancia_min = d
-            coche_cercano = coche
+        if distance < min_distance:
+            min_distance = distance
+            closest_vehicle = vehicle
 
-    return coche_cercano
+    return closest_vehicle
 
 
-def procesar_deteccion(centro, bbox, coches, coches_visibles,
-                       linea_conteo, contador, id_counter, max_dist):
+def process_detection(center, bbox, vehicles, visible_vehicles,
+                      count_line_y, vehicle_count, vehicle_id_counter, max_distance):
     """
-    Actualiza un coche existente o crea uno nuevo a partir
-    de una detección.
+    Updates an existing vehicle or creates a new one from a detection.
     """
-    coche = buscar_coche_mas_cercano(centro, coches, max_dist)
+    vehicle = find_closest_vehicle(center, vehicles, max_distance)
 
-    # CASO 1: coche ya existente
-    if coche:
-        coche.centro = centro
-        coche.dimensiones = bbox
-        coche.sin_deteccion = 0
-        coches_visibles.append(coche)
+    # CASE 1: existing vehicle
+    if vehicle:
+        vehicle.center = center
+        vehicle.bbox = bbox
+        vehicle.frames_missing = 0
+        visible_vehicles.append(vehicle)
 
-        # Contar si cruza la línea por primera vez
-        if not coche.contado and centro[1] >= linea_conteo:
-            contador += 1
-            coche.contado = True
+        # Count if it crosses the line for the first time
+        if not vehicle.counted and center[1] >= count_line_y:
+            vehicle_count += 1
+            vehicle.counted = True
 
-    # CASO 2: coche nuevo
+    # CASE 2: new vehicle
     else:
-        nuevo = Coche(centro, bbox, id_counter)
-        id_counter += 1
+        new_vehicle = Vehicle(center, bbox, vehicle_id_counter)
+        vehicle_id_counter += 1
 
-        # Si aparece ya pasado la línea, se cuenta
-        if centro[1] >= linea_conteo:
-            contador += 1
-            nuevo.contado = True
+        # Count immediately if already past the line
+        if center[1] >= count_line_y:
+            vehicle_count += 1
+            new_vehicle.counted = True
 
-        coches.append(nuevo)
-        coches_visibles.append(nuevo)
+        vehicles.append(new_vehicle)
+        visible_vehicles.append(new_vehicle)
 
-    return contador, id_counter
+    return vehicle_count, vehicle_id_counter
 
 
 # ************************************************************
-# FILTRADO DE COCHES PERDIDOS
+# FILTER LOST VEHICLES
 
-def filtrar_coches(coches, coches_visibles, limite_deteccion):
+def filter_vehicles(vehicles, visible_vehicles, max_frames_missing):
     """
-    Elimina coches que llevan demasiados frames sin detectarse.
+    Removes vehicles that have been missing for too many frames.
     """
-    coches_filtrados = []
+    filtered_vehicles = []
 
-    for coche in coches:
-        if coche in coches_visibles:
-            coches_filtrados.append(coche)
+    for vehicle in vehicles:
+        if vehicle in visible_vehicles:
+            filtered_vehicles.append(vehicle)
         else:
-            coche.sin_deteccion += 1
-            if coche.sin_deteccion < limite_deteccion:
-                coches_filtrados.append(coche)
+            vehicle.frames_missing += 1
+            if vehicle.frames_missing < max_frames_missing:
+                filtered_vehicles.append(vehicle)
 
-    return coches_filtrados
+    return filtered_vehicles
 
 
 # ************************************************************
-# DIBUJADO
+# DRAWING
 
-def dibujar(frame, coches_visibles, linea_conteo, contador):
+def draw(frame, visible_vehicles, count_line_y, vehicle_count):
     """
-    Dibuja rectángulos, línea de conteo y contador.
+    Draws bounding boxes, counting line, and vehicle count on the frame.
     """
-    for coche in coches_visibles:
-        x, y, w, h = coche.dimensiones
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    for vehicle in visible_vehicles:
+        x, y, w, h = vehicle.bbox
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-    cv2.line(frame, (0, linea_conteo),
-             (frame.shape[1], linea_conteo), (0, 0, 255), 2)
+    # Draw the counting line
+    cv2.line(frame, (0, count_line_y),
+             (frame.shape[1], count_line_y), (0, 0, 255), 2)
 
-    cv2.putText(frame, f"Coches detectados: {contador}",
+    # Draw the counter text
+    cv2.putText(frame, f"Vehicles detected: {vehicle_count}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                 1, (0, 255, 0), 2)

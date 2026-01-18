@@ -2,24 +2,24 @@ import cv2
 from utils import *
 
 # ************************************************************
-# CONFIGURACIÓN
+# CONFIGURATION
 
 VIDEO_PATH = "trafico.mp4"
 
-min_area = 2800
-max_dist = 120
-limite_deteccion = 5
+MIN_CONTOUR_AREA = 2800       # Minimum contour area to be considered a vehicle
+MAX_DISTANCE = 120            # Maximum distance to match an existing vehicle
+MAX_FRAMES_MISSING = 5        # Maximum frames a vehicle can be missing before removal
 
-linea_y1 = 400
-linea_y2 = 900
-linea_conteo = 550
+COUNT_LINE_Y1 = 400           # Upper boundary of counting area
+COUNT_LINE_Y2 = 900           # Lower boundary of counting area
+COUNT_LINE_Y = 550            # Y position of the counting line
 
 
 def main():
-    # Inicialización de vídeo y estructuras
+    # Video and structures initialization
     video = cv2.VideoCapture(VIDEO_PATH)
 
-    fondo = cv2.createBackgroundSubtractorMOG2(
+    background_subtractor = cv2.createBackgroundSubtractorMOG2(
         history=500,
         varThreshold=40,
         detectShadows=False
@@ -27,9 +27,10 @@ def main():
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
-    coches = []
-    contador_coches = 0
-    id_counter = 1
+    vehicles = []            # List of all tracked vehicles
+    visible_vehicles = []    # Temporary list of vehicles detected in the current frame
+    vehicle_count = 0        # Total vehicles counted
+    vehicle_id_counter = 1   # Unique ID for new vehicles
 
     # ************************************************************
     # BUCLE PRINCIPAL
@@ -39,48 +40,48 @@ def main():
         if not ret:
             break
 
-        fgmask = obtener_mascara(frame, fondo, kernel)
+        fg_mask = get_foreground_mask(frame, background_subtractor, kernel)
         contours, _ = cv2.findContours(
-            fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
 
-        coches_visibles = []
+        visible_vehicles = []  # Vehicles detected in the current frame
 
         for cnt in contours:
-            if cv2.contourArea(cnt) < min_area:
+            if cv2.contourArea(cnt) < MIN_CONTOUR_AREA:
                 continue
 
             x, y, w, h = cv2.boundingRect(cnt)
-            centro = (x + w/2, y + h/2)
+            center = (int(x + w/2), int(y + h/2))
 
-            # Zona de interés
-            if not (linea_y1 < centro[1] < linea_y2):
+            # Region of interest
+            if not (COUNT_LINE_Y1 < center[1] < COUNT_LINE_Y2):
                 continue
 
-            contador_coches, id_counter = procesar_deteccion(
-                centro,
+            vehicle_count, vehicle_id_counter = process_detection(
+                center,
                 (x, y, w, h),
-                coches,
-                coches_visibles,
-                linea_conteo,
-                contador_coches,
-                id_counter,
-                max_dist
+                vehicles,
+                visible_vehicles,
+                COUNT_LINE_Y,
+                vehicle_count,
+                vehicle_id_counter,
+                MAX_DISTANCE
             )
 
-        coches = filtrar_coches(coches, coches_visibles, limite_deteccion)
-        dibujar(frame, coches_visibles, linea_conteo, contador_coches)
+        vehicles = filter_vehicles(vehicles, visible_vehicles, MAX_FRAMES_MISSING)
+        draw(frame, visible_vehicles, COUNT_LINE_Y, vehicle_count)
 
-        cv2.imshow("Conteo de coches", frame)
-        if cv2.waitKey(2) & 0xFF == 27:
+        cv2.imshow("Vehicle Counting", frame)
+        if cv2.waitKey(2) & 0xFF == 27:  # Press ESC to exit
             break
 
     # ************************************************************
-    # LIMPIEZA
+    # CLEANUP
 
     video.release()
     cv2.destroyAllWindows()
-    print(f"Total coches: {contador_coches}")
+    print(f"Total vehicles: {vehicle_count}")
 
 
 if __name__ == "__main__":
